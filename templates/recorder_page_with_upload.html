@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>음성 처리 (녹음 또는 파일 업로드)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; margin: 0; padding: 20px; background-color: #f8f9fa; color: #212529; display: flex; flex-direction: column; align-items: center; }
+        .container { background-color: #ffffff; padding: 25px 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 100%; max-width: 700px; }
+        nav { width: 100%; padding-bottom: 15px; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; text-align: center; }
+        nav a { margin: 0 10px; text-decoration: none; color: #007bff; font-weight: 500; }
+        h1, h2 { color: #343a40; text-align: center; }
+        .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px dashed #ced4da; }
+        .section:last-child { border-bottom: none; }
+        .controls button, input[type="submit"] { padding: 10px 15px; margin: 8px 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; transition: background-color 0.2s ease-in-out; }
+        input[type="file"] { margin: 8px 5px; padding: 8px; border: 1px solid #ced4da; border-radius: 5px; }
+        #startRecordButton { background-color: #28a745; color: white; }
+        #stopRecordButton { background-color: #dc3545; color: white; }
+        #sendRecordedAudioButton, #uploadSelectedFileButton { background-color: #007bff; color: white; } /* 전송 버튼들 */
+        button:disabled, input[type="submit"]:disabled { background-color: #adb5bd; cursor: not-allowed; }
+        #statusRecord, #statusUpload { margin-top: 15px; font-weight: 500; min-height: 1.5em; padding: 8px; border-radius: 5px; }
+        .status-idle { color: #6c757d; background-color: #e9ecef;}
+        .status-recording { color: #dc3545; background-color: #f8d7da;}
+        .status-processing { color: #007bff; background-color: #cce5ff;}
+        .status-error { color: #721c24; background-color: #f8d7da; }
+        .status-success { color: #155724; background-color: #d4edda; }
+        .status-ready { color: #17a2b8; background-color: #d1ecf1; }
+        #audioPlayback { margin-top: 15px; width: 100%; }
+        .message-area { margin-top: 15px; padding: 10px; border-radius: 5px; }
+        .message-area.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .message-area.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <a href="{{ request.url_for('get_upload_form_route') }}">음성 처리 홈</a>
+        </nav>
+        <h1>음성 파일을 텍스트로 변환</h1>
+
+        {% if request.query_params.get("error") %}
+            <p class="message-area error">오류: {{ request.query_params.get("error") }}</p>
+        {% elif request.query_params.get("message_type") == "success_upload" %}
+            <p class="message-area success">파일 업로드 성공! Job ID <a href="{{ request.url_for('get_result_page_route', job_id=request.query_params.get('job_id')) }}">{{ request.query_params.get('job_id') }}</a> 로 결과를 확인하세요.</p>
+        {% endif %}
+
+        <div class="section">
+            <h2>1. 직접 음성 녹음하기</h2>
+            <div class="controls">
+                <button id="startRecordButton">녹음 시작</button>
+                <button id="stopRecordButton" disabled>녹음 중지</button>
+                <button id="sendRecordedAudioButton" disabled>녹음된 파일 전송</button>
+            </div>
+            <div id="statusRecord" class="status-idle">마이크 권한을 허용하고 녹음 시작 버튼을 누르세요.</div>
+            <audio id="audioPlayback" controls style="display:none;"></audio>
+        </div>
+
+        <div class="section">
+            <h2>2. WebM 파일 업로드하기</h2>
+            <form id="fileUploadForm" method="post" enctype="multipart/form-data">
+                <input type="file" name="file" id="fileInput" accept=".webm" required>
+                <input type="submit" id="uploadSelectedFileButton" value="선택한 파일 업로드">
+            </form>
+            <div id="statusUpload" class="status-idle">업로드할 WebM 파일을 선택하세요.</div>
+        </div>
+    </div>
+
+    <script>
+        // --- 녹음 관련 변수 및 함수 ---
+        const startRecordButton = document.getElementById('startRecordButton');
+        const stopRecordButton = document.getElementById('stopRecordButton');
+        const sendRecordedAudioButton = document.getElementById('sendRecordedAudioButton');
+        const statusRecordDiv = document.getElementById('statusRecord');
+        const audioPlayback = document.getElementById('audioPlayback');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let streamReference = null;
+        let recordedAudioData = null; 
+
+        const RECORDED_MIME_TYPE = 'audio/webm; codecs=opus'; // WebM Opus 권장
+        const RECORDED_FILENAME = 'recorded_audio.webm';
+
+        function updateRecordStatus(message, type = 'idle') {
+            statusRecordDiv.textContent = message;
+            statusRecordDiv.className = ''; 
+            statusRecordDiv.classList.add(`status-${type}`);
+        }
+
+        async function getMicrophoneStream() {
+            // ... (이전 #35 답변의 getMicrophoneStream 함수와 동일) ...
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                updateRecordStatus('오류: 브라우저가 MediaDevices API를 지원하지 않습니다.', 'error');
+                throw new Error('MediaDevices API not supported.');
+            }
+            try {
+                streamReference = await navigator.mediaDevices.getUserMedia({ audio: true });
+                return streamReference;
+            } catch (err) {
+                console.error('마이크 접근 오류:', err);
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    updateRecordStatus('오류: 마이크 사용 권한이 거부되었습니다.', 'error');
+                } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+                    updateRecordStatus('오류: 사용 가능한 마이크를 찾을 수 없습니다.', 'error');
+                } else {
+                    updateRecordStatus('오류: 마이크에 접근할 수 없습니다.', 'error');
+                }
+                throw err;
+            }
+        }
+        
+        async function startRecording() {
+            console.log("startRecording 호출됨");
+            updateRecordStatus('마이크 권한 요청 중...', 'processing');
+            audioChunks = [];
+            recordedAudioData = null;
+            audioPlayback.style.display = 'none';
+            audioPlayback.src = '';
+
+            try {
+                const stream = await getMicrophoneStream();
+                let options = { mimeType: RECORDED_MIME_TYPE };
+                if (!MediaRecorder.isTypeSupported(RECORDED_MIME_TYPE)) {
+                    console.warn(`${RECORDED_MIME_TYPE} 지원 안됨. 기본값 시도.`);
+                    options = {};
+                }
+                mediaRecorder = new MediaRecorder(stream, options);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    console.log("녹음 중지 (onstop)");
+                    if (audioChunks.length === 0) {
+                        updateRecordStatus('녹음된 데이터가 없습니다.', 'error');
+                        resetRecordingButtons();
+                        if (streamReference) streamReference.getTracks().forEach(track => track.stop());
+                        return;
+                    }
+                    const actualMimeType = mediaRecorder.mimeType || RECORDED_MIME_TYPE;
+                    const audioBlob = new Blob(audioChunks, { type: actualMimeType });
+                    
+                    recordedAudioData = { blob: audioBlob, fileName: RECORDED_FILENAME, mimeType: actualMimeType };
+                    
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    audioPlayback.src = audioUrl;
+                    audioPlayback.style.display = 'block';
+                    updateRecordStatus(`녹음 완료. 확인 후 "녹음된 파일 전송" 버튼을 누르세요.`, 'ready');
+                    
+                    sendRecordedAudioButton.disabled = false;
+                    startRecordButton.disabled = false;
+                    stopRecordButton.disabled = true;
+                    if (streamReference) streamReference.getTracks().forEach(track => track.stop());
+                };
+                
+                mediaRecorder.onerror = (event) => {
+                    console.error("MediaRecorder 오류:", event.error);
+                    updateRecordStatus(`녹음 오류: ${event.error.name}`, 'error');
+                    resetRecordingButtons();
+                    if (streamReference) streamReference.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                updateRecordStatus('녹음 중...', 'recording');
+                startRecordButton.disabled = true;
+                stopRecordButton.disabled = false;
+                sendRecordedAudioButton.disabled = true;
+            } catch (err) {
+                resetRecordingButtons();
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+        }
+
+        function resetRecordingButtons() {
+            startRecordButton.disabled = false;
+            stopRecordButton.disabled = true;
+            sendRecordedAudioButton.disabled = true;
+        }
+
+        async function sendRecordedAudio() {
+            if (!recordedAudioData || !recordedAudioData.blob) {
+                updateRecordStatus('전송할 녹음 데이터가 없습니다.', 'error');
+                return;
+            }
+            updateRecordStatus(`녹음된 파일(${recordedAudioData.fileName}) 전송 중...`, 'processing');
+            await sendDataToServer(recordedAudioData.blob, recordedAudioData.fileName);
+        }
+
+        // --- 파일 업로드 관련 변수 및 함수 ---
+        const fileUploadForm = document.getElementById('fileUploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const uploadSelectedFileButton = document.getElementById('uploadSelectedFileButton');
+        const statusUploadDiv = document.getElementById('statusUpload');
+
+        function updateUploadStatus(message, type = 'idle') {
+            statusUploadDiv.textContent = message;
+            statusUploadDiv.className = '';
+            statusUploadDiv.classList.add(`status-${type}`);
+        }
+        
+        fileUploadForm.onsubmit = async (event) => {
+            event.preventDefault(); // 기본 폼 제출 방지
+            const file = fileInput.files[0];
+            if (!file) {
+                updateUploadStatus('업로드할 파일을 선택해주세요.', 'error');
+                return;
+            }
+            // 확장자 검사 (클라이언트 측에서도 간단히)
+            if (!file.name.toLowerCase().endsWith('.webm')) {
+                 updateUploadStatus('WebM 파일만 업로드 가능합니다.', 'error');
+                 return;
+            }
+
+            updateUploadStatus(`선택한 파일(${file.name}) 전송 중...`, 'processing');
+            uploadSelectedFileButton.disabled = true;
+            await sendDataToServer(file, file.name);
+            uploadSelectedFileButton.disabled = false; // 완료 또는 오류 후 다시 활성화
+            fileUploadForm.reset(); // 폼 초기화
+        };
+
+        // --- 공통 서버 전송 함수 ---
+        async function sendDataToServer(dataBlobOrFile, fileName) {
+            const formData = new FormData();
+            formData.append('file', dataBlobOrFile, fileName);
+            
+            // 버튼 비활성화 (중복 전송 방지)
+            startRecordButton.disabled = true;
+            stopRecordButton.disabled = true;
+            sendRecordedAudioButton.disabled = true;
+            uploadSelectedFileButton.disabled = true;
+
+            try {
+                const response = await fetch("{{ request.url_for('upload_and_process_file_route') }}", {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    let errorDetail = `서버 오류: ${response.status}`;
+                    try { const errorData = await response.json(); errorDetail = errorData.detail || errorDetail; } 
+                    catch (e) { errorDetail = await response.text() || errorDetail; }
+                    throw new Error(errorDetail);
+                }
+                
+                if (response.redirected) {
+                    // 성공 메시지는 리디렉션된 페이지에서 쿼리 파라미터로 보여줄 수 있음
+                    window.location.href = response.url + (response.url.includes('?') ? '&' : '?') + 'message_type=success_upload&message_text=File processed';
+                } else {
+                    // 보통 RedirectResponse를 사용하므로 이 경우는 잘 없음
+                    const responseData = await response.json().catch(() => null);
+                    // ... (이전과 유사한 응답 처리) ...
+                    updateRecordStatus('서버 응답을 받았으나 리디렉션되지 않았습니다.', 'warning');
+                    updateUploadStatus('서버 응답을 받았으나 리디렉션되지 않았습니다.', 'warning');
+                }
+            } catch (err) {
+                console.error('서버 전송 또는 응답 처리 오류:', err);
+                // 어떤 작업에서 오류가 났는지 구분하기 어려우므로 양쪽 상태창에 표시
+                updateRecordStatus(`전송 오류: ${err.message}`, 'error');
+                updateUploadStatus(`전송 오류: ${err.message}`, 'error');
+            } finally {
+                // 대부분의 경우 페이지가 리디렉션되므로, 버튼 상태는 새 페이지 로드 시 결정됨.
+                // 리디렉션 안 되는 경우를 대비해 버튼 상태 복원
+                if (!document.hidden) { // 페이지가 여전히 활성 상태일 때만
+                    resetRecordingButtons();
+                    uploadSelectedFileButton.disabled = false;
+                }
+            }
+        }
+
+        // 버튼 이벤트 리스너
+        startRecordButton.onclick = startRecording;
+        stopRecordButton.onclick = stopRecording;
+        sendRecordedAudioButton.onclick = sendRecordedAudio;
+
+    </script>
+</body>
+</html>
