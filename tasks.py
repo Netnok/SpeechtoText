@@ -5,15 +5,10 @@ import redis
 import json
 import tempfile
 import logging
-
 from config import Config
-
-# Google Cloud Storage 클라이언트 (파일 다운로드/삭제용)
 from google.cloud import storage as gcs_storage
 from google.auth.exceptions import DefaultCredentialsError
-
-# OpenAI 클라이언트 (v1.x.x 이상)
-from openai import OpenAI # 'openai' 라이브러리 v1.x.x 이상 필요: pip install --upgrade openai
+from openai import OpenAI 
 
 logger = logging.getLogger(__name__) # Celery 작업용 로거
 
