@@ -1,0 +1,67 @@
+openapi: 3.0.3
+info:
+  title: Audio-to-Text Service (OpenAI Whisper API)
+  version: "1.0"
+paths:
+  /:
+    get:
+      tags:
+        - Pages
+      summary: 파일 업로드 폼 페이지
+      operationId: get_upload_form_route
+      responses:
+        '200':
+          description: 업로드 폼 HTML 페이지
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /upload:
+    post:
+      tags:
+        - Actions
+      summary: 음성 파일 업로드 및 처리 시작
+      operationId: upload_and_process_file_route
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 업로드할 음성 파일
+      responses:
+        '303':
+          description: 결과 페이지로 리디렉션
+        '400':
+          description: 잘못된 요청 (파일 없음 또는 형식 오류)
+        '500':
+          description: 서버 오류
+        '503':
+          description: 종속 시스템(GCS/Redis) 오류
+
+  /result/{job_id}:
+    get:
+      tags:
+        - Pages
+      summary: 특정 STT 작업 결과 조회
+      operationId: get_result_page_route
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: 작업 식별자 (UUID)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: STT 결과 HTML 페이지
+          content:
+            text/html:
+              schema:
+                type: string
+
