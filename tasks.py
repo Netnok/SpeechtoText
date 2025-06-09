@@ -191,3 +191,69 @@ def process_audio_with_openai_whisper_task(self, job_id, gcs_bucket_for_audio, g
         
         # 5. 원본 GCS 오디오 파일 삭제
         delete_gcs_file(gcs_bucket_for_audio, gcs_object_key_for_audio, job_id)
+
+# --- [신규 추가] 텍스트 요약 Celery 작업 정의 ---
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=60)
+def summarize_text_with_gpt_task(self, job_id, text_to_summarize):
+    """
+    주어진 텍스트를 OpenAI Chat Completion API를 사용하여 요약하고 결과를 Redis에 저장합니다.
+    """
+    task_log_prefix = f"Celery Task ID: {self.request.id} - JobID: {job_id}"
+    logger.info(f"{task_log_prefix} - OpenAI Chat-GPT 요약 처리 시작")
+
+    # 1. OpenAI 클라이언트 및 입력 텍스트 유효성 검사
+    if not openai_client:
+        error_msg = "OpenAI Client is not initialized in Celery worker. Check API Key."
+        logger.error(f"{task_log_prefix}: {error_msg}")
+        # 요약 결과용 Redis 키 사용 (예: "summary_result:job_id")
+        store_result_in_redis(f"summary:{job_id}", {"status": "Failed", "error": error_msg})
+        return error_msg
+
+    if not text_to_summarize or not text_to_summarize.strip():
+        error_msg = "Input text for summarization is empty."
+        logger.warning(f"{task_log_prefix}: {error_msg}")
+        store_result_in_redis(f"summary:{job_id}", {"status": "Completed", "summary": "", "detail": error_msg})
+        return f"Job {job_id} completed with empty summary as input was empty."
+
+    # 2. Redis에 'Processing' 상태 기록 (요약 작업용)
+    # 기존 STT 결과와 키를 분리하기 위해 prefix(summary:) 사용
+    store_result_in_redis(f"summary:{job_id}", {"status": "Processing"})
+
+    try:
+        # 3. OpenAI Chat Completions API 호출
+        logger.info(f"{task_log_prefix}: Sending text (length: {len(text_to_summarize)}) to OpenAI for summarization.")
+        
+        # 시스템 프롬프트는 Config에서 관리하는 것이 유연합니다.
+        system_prompt = Config.SUMMARY_PROMPT
+
+        chat_completion = openai_client.chat.completions.create(
+            model=Config.SUMMARY_MODEL, # 예: "gpt-4o", "gpt-3.5-turbo"
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text_to_summarize}
+            ],
+            temperature=0.5, # 요약의 일관성을 위해 낮은 값 설정
+        )
+
+        summary_text = chat_completion.choices[0].message.content.strip()
+        logger.info(f"{task_log_prefix}: Summarization completed. Summary length: {len(summary_text)}")
+
+        # 4. 요약 결과 Redis에 저장
+        result_data = {
+            "status": "Completed",
+            "summary": summary_text,
+        }
+        store_result_in_redis(f"summary:{job_id}", result_data)
+
+        return f"Job {job_id} successfully summarized."
+
+    except openai.APIError as e_openai:
+        error_message_for_redis = f"OpenAI API Error: {type(e_openai).__name__} - Status: {e_openai.status_code if hasattr(e_openai, 'status_code') else 'N/A'} - Message: {str(e_openai)}"
+        logger.error(f"{task_log_prefix} OpenAI API Error: {e_openai}", exc_info=True)
+        store_result_in_redis(f"summary:{job_id}", {"status": "Failed", "error": error_message_for_redis})
+        return f"Job {job_id} failed with OpenAI API: {error_message_for_redis}"
+    except Exception as exc:
+        error_message_for_redis = f"Error in summarization task: {type(exc).__name__} - {str(exc)}"
+        logger.error(f"{task_log_prefix} General Error: {exc}", exc_info=True)
+        store_result_in_redis(f"summary:{job_id}", {"status": "Failed", "error": error_message_for_redis})
+        return f"Job {job_id} failed: {error_message_for_redis}"
