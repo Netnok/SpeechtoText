@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard] # standard는 추가적인 성능 라이브러리 포함
+gunicorn
+celery[redis]
+redis
+google-cloud-storage
+google-cloud-speech # Google STT API 사용 시 (현재는 OpenAI 사용 중)
+openai # OpenAI Whisper API 사용 시
+Jinja2
+python-multipart
+werkzeug # secure_filename 등 유틸리티
+python-dotenv # .env 파일 로드용 (선택 사항, Cloud Run에서는 환경 변수 직접 설정)

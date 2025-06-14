@@ -1,0 +1,12 @@
+# .dockerignore
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+*.db
+*.sqlite3
+local_audio_files/ # (만약 로컬에 오디오 파일을 저장하는 폴더가 있다면)
+# 기타 이미지에 포함할 필요 없는 파일이나 폴더
