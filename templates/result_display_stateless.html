@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>변환 결과 (Job ID: {{ job_id }})</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        nav { margin-bottom: 20px; }
+        nav a { margin-right: 15px; text-decoration: none; color: #007bff; }
+        nav a:hover { text-decoration: underline; }
+        h1, h2 { color: #333; }
+        .file-info { border: 1px solid #eee; padding: 15px; margin-top:15px; background-color: #f9f9f9; border-radius: 5px;}
+        .status-pending, .status-processing, .status-pending_or_expired { color: orange; font-weight: bold; }
+        .status-completed { color: green; font-weight: bold; }
+        .status-failed, .status-error { color: red; font-weight: bold; }
+        pre { 
+            white-space: pre-wrap; 
+            word-wrap: break-word; 
+            background-color: #e9ecef; 
+            padding: 10px; 
+            border: 1px solid #dee2e6; 
+            border-radius: 4px; 
+            max-height: 300px; 
+            overflow-y: auto; 
+        }
+        .error-message-detail { color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; padding: 10px; border-radius: 4px; }
+    </style>
+    {% if status == 'Processing' or status == 'Pending or Expired' %}
+        <meta http-equiv="refresh" content="10"> {% endif %}
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <a href="{{ request.url_for('get_upload_form_route') }}">새로 녹음하기</a>
+            </nav>
+        <hr>
+        <h1>음성 변환 결과</h1>
+
+        <div class="file-info">
+            <p><strong>요청 ID (Job ID):</strong> {{ job_id }}</p>
+            {% if uploader_ip %} <p><strong>요청 IP:</strong> {{ uploader_ip }}</p>
+            {% endif %}
+
+            {% if status %}
+                <p><strong>처리 상태: <span class="status-{{ status.lower().replace(' ', '_') }}">{{ status }}</span></strong></p>
+                
+                {% if status == 'Completed' %}
+                    <h2>변환된 텍스트:</h2>
+                    {% if transcription %}
+                        <pre>{{ transcription }}</pre>
+                        {% if detected_language %}
+                            <p><small>감지된 언어: {{ detected_language }}</small></p>
+                        {% endif %}
+                    {% elif error_detail %}
+                        <p class="error-message-detail">{{ error_detail }}</p>
+                    {% else %}
+                        <p>변환된 텍스트가 없거나 음성이 감지되지 않았습니다.</p>
+                    {% endif %}
+                {% elif status == 'Failed' %}
+                    <p class="error-message-detail"><strong>오류 메시지:</strong> {{ error_message }}</p>
+                {% elif status == 'Processing' %}
+                    <p>파일이 처리 중입니다. 잠시 후 이 페이지가 자동으로 새로고침되거나, 수동으로 새로고침하여 상태를 확인해주세요.</p>
+                {% elif status == 'Pending or Expired' %}
+                     <p>파일이 아직 처리 대기 중이거나, 결과 조회 기간이 만료되었거나, 유효하지 않은 Job ID 입니다. 잠시 후 새로고침 해보세요.</p>
+                {% elif status == 'Error' %}
+                     <p class="error-message-detail"><strong>오류:</strong> {{ error_message }}</p>
+                {% endif %}
+            {% else %}
+                <p>Job ID에 대한 상태 정보를 불러올 수 없습니다. 잠시 후 시도해주세요.</p>
+            {% endif %}
+        </div>
+        <p><a href="{{ request.url_for('get_upload_form_route') }}">다른 파일 녹음하기</a></p>
+    </div>
+</body>
+</html>

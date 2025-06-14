@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>음성 녹음 및 변환</title>
+    <style>
+        /* 기본 스타일 */
+        button { padding: 10px; margin: 5px; }
+        #status { margin-top: 10px; }
+        #transcriptionResult { margin-top: 10px; white-space: pre-wrap; background-color: #f0f0f0; padding: 10px;}
+    </style>
+</head>
+<body>
+    <h1>음성 녹음 후 텍스트로 변환하기</h1>
+
+    <button id="startRecordButton">녹음 시작</button>
+    <button id="stopRecordButton" disabled>녹음 중지</button>
+    <div id="status">대기 중...</div>
+    <audio id="audioPlayback" controls style="display:none;"></audio>
+    <div id="transcriptionResult"></div>
+
+    <script>
+        const startRecordButton = document.getElementById('startRecordButton');
+        const stopRecordButton = document.getElementById('stopRecordButton');
+        const statusDiv = document.getElementById('status');
+        const audioPlayback = document.getElementById('audioPlayback');
+        const transcriptionResultDiv = document.getElementById('transcriptionResult');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let currentJobId = null;
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // 예시: WebM 형식, Opus 코덱으로 녹음 (STT 서비스가 지원하는지 확인 필요)
+                // 또는 audio/wav 등으로 설정 가능
+                const options = { mimeType: 'audio/webm; codecs=opus' }; 
+                mediaRecorder = new MediaRecorder(stream, options);
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    audioChunks = []; // 다음 녹음을 위해 초기화
+
+                    // 녹음된 오디오 재생 (선택 사항)
+                    // const audioUrl = URL.createObjectURL(audioBlob);
+                    // audioPlayback.src = audioUrl;
+                    // audioPlayback.style.display = 'block';
+
+                    statusDiv.textContent = '녹음 완료. 서버로 전송 중...';
+                    await sendAudioToServer(audioBlob);
+
+                    // 스트림 트랙 중지 (마이크 사용 중지)
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                statusDiv.textContent = '녹음 중...';
+                startRecordButton.disabled = true;
+                stopRecordButton.disabled = false;
+                transcriptionResultDiv.textContent = ''; // 이전 결과 초기화
+                currentJobId = null; // 작업 ID 초기화
+
+            } catch (err) {
+                console.error('마이크 접근 오류:', err);
+                statusDiv.textContent = '오류: 마이크에 접근할 수 없습니다.';
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                statusDiv.textContent = '녹음 중지됨. 처리 대기 중...';
+                startRecordButton.disabled = false;
+                stopRecordButton.disabled = true;
+            }
+        }
+
+        async function sendAudioToServer(audioBlob) {
+            const formData = new FormData();
+            // 서버가 받을 파일 이름과 형식을 지정 (예: recorded_audio.webm)
+            formData.append('file', audioBlob, 'recorded_audio.webm'); 
+
+            try {
+                // FastAPI의 /upload 엔드포인트로 전송
+                const response = await fetch("{{ request.url_for('upload_and_process_file_route') }}", { // FastAPI에서는 request.url_for
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `서버 오류: ${response.status}`);
+                }
+                
+                // FastAPI에서 RedirectResponse를 반환하면, response.url로 리디렉션 URL을 알 수 있음
+                // 여기서는 Job ID를 포함한 결과 페이지 URL로 리디렉션 되었다고 가정
+                if (response.redirected) {
+                    statusDiv.textContent = '서버 전송 완료. 결과 페이지로 이동합니다...';
+                    // Job ID를 URL에서 추출하거나, 서버가 JSON으로 Job ID를 반환하도록 수정할 수도 있음
+                    // 예시: /result/JOB_ID 형태의 URL로 리디렉션 되었다고 가정
+                    const resultPageUrl = response.url; 
+                    const urlParts = resultPageUrl.split('/');
+                    currentJobId = urlParts[urlParts.length - 1]; // 마지막 부분이 Job ID라고 가정
+
+                    if (currentJobId) {
+                        statusDiv.textContent = `처리 작업 ID: ${currentJobId}. 결과 확인 중...`;
+                        // 결과 페이지로 직접 이동하거나, 여기서 결과 폴링 시작
+                        window.location.href = resultPageUrl; // 결과 페이지로 이동
+                        // 또는 checkResultPeriodically(currentJobId);
+                    } else {
+                         statusDiv.textContent = '서버 응답에서 Job ID를 찾을 수 없습니다.';
+                    }
+                } else {
+                    // 만약 서버가 JSON으로 Job ID를 반환한다면:
+                    // const data = await response.json();
+                    // currentJobId = data.job_id;
+                    // statusDiv.textContent = `처리 작업 ID: ${currentJobId}. 결과 확인 중...`;
+                    // checkResultPeriodically(currentJobId);
+                    statusDiv.textContent = '서버 응답 형식이 예상과 다릅니다.';
+                }
+
+            } catch (err) {
+                console.error('서버 전송 오류:', err);
+                statusDiv.textContent = `오류: ${err.message}`;
+            }
+        }
+        
+        // (선택 사항) 주기적으로 결과 확인하는 함수 (결과 페이지에서 새로고침하는 대신 사용)
+        // async function checkResultPeriodically(jobId) { ... }
+
+        startRecordButton.onclick = startRecording;
+        stopRecordButton.onclick = stopRecording;
+    </script>
+</body>
+</html>

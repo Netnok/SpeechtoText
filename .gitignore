@@ -1,0 +1,8 @@
+# Python Virtual Environment
+venv/
+.venv/  # 혹시 .venv를 사용한다면 이것도 추가
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.idea
